@@ -39,6 +39,7 @@ var outputContainerSas;
 var blobClient;
 
 var userName = process.env['USERNAME'] //TODO: This is probably windows specific
+const millisecondsPerSecond = 1000;
 
 function submitJobWrapper(fileName, callback) {
   suite.execute('batch job create --template %s --account-name %s --account-key %s --account-endpoint %s',
@@ -75,7 +76,7 @@ function waitForTasksComplete(jobId, timeout, callback) {
           console.log('Tasks in job ' + jobId + ' are now completed.');
           callback(null);
         } else {
-          var waitFor = 3 * 1000;
+          var waitFor = 3 * millisecondsPerSecond;
           var timeRemaining = timeout - waitFor;
           if(timeRemaining < 0) {
             callback(new Error('Timed out'));
@@ -97,7 +98,7 @@ function waitForPoolSteady(poolId, timeout, callback) {
       console.log('pool reached steady state');
       callback(null);
     } else {
-      var waitFor = 3 * 1000;
+      var waitFor = 3 * millisecondsPerSecond;
       var timeRemaining = timeout - waitFor;
       if (timeRemaining < 0) {
         callback(new Error('Timed out'));
@@ -131,7 +132,7 @@ function waitForVMsIdle(poolId, timeout, callback) {
           console.log('VMs in pool ' + poolId + ' are now idle.');
           callback(null, null);
         } else {
-          var waitFor = 3 * 1000;
+          var waitFor = 3 * millisecondsPerSecond;
           var timeRemaining = timeout - waitFor;
           if(timeRemaining < 0) {
             callback(new Error('Timed out'), null);
@@ -167,7 +168,14 @@ function listBlobs(containerName, _) {
   return blobs;
 }
 
-function createBasicSpec(jobId, poolId, taskId, textToEcho) {
+function createBasicSpec(jobId, poolId, taskId, textToEcho, isWindows) {
+  let cmdLine;
+  if (isWindows) {
+    // Strip pesky newline from echo
+    cmdLine = util.format('cmd /c echo | set /p dummy=%s', textToEcho);
+  } else {
+    cmdLine = util.format('/bin/bash -c "echo %s"', textToEcho);
+  }
   var spec = {
     job: {
       type: 'Microsoft.Batch/batchAccounts/jobs',
@@ -182,7 +190,7 @@ function createBasicSpec(jobId, poolId, taskId, textToEcho) {
           tasks: [
             {
               id: taskId,
-              commandLine: util.format('echo %s', textToEcho),
+              commandLine: cmdLine,
               constraints: {
                   retentionTime: "PT1H"
               },              
@@ -232,7 +240,7 @@ function createPoolIfNotExist(poolId, flavor, _) {
     }).length;
     return length > 0;
   };
-
+  
   if (flavor === 'ubuntu14') {
     publisher = 'Canonical';
     offer = 'UbuntuServer';
@@ -263,7 +271,27 @@ function createPoolIfNotExist(poolId, flavor, _) {
     skuId = '12-SP1';
     var nodeAgentSkuResults = skuResults.filter(skuFilterFunction);
     nodeAgentSkuId = nodeAgentSkuResults[0].id;
+  } else if (flavor === 'windows-2012') {
+    publisher = 'MicrosoftWindowsServer';
+    offer = 'WindowsServer';
+    skuId = '2012-Datacenter';
+    var nodeAgentSkuResults = skuResults.filter(skuFilterFunction);
+    nodeAgentSkuId = nodeAgentSkuResults[0].id;
+  } else if (flavor === 'windows-2012-r2') {
+    publisher = 'MicrosoftWindowsServer';
+    offer = 'WindowsServer';
+    skuId = '2012-R2-Datacenter';
+    var nodeAgentSkuResults = skuResults.filter(skuFilterFunction);
+    nodeAgentSkuId = nodeAgentSkuResults[0].id;
+  } else if (flavor === 'windows-2016') {
+    publisher = 'MicrosoftWindowsServer';
+    offer = 'WindowsServer';
+    skuId = '2016-Datacenter';
+    var nodeAgentSkuResults = skuResults.filter(skuFilterFunction);
+    nodeAgentSkuId = nodeAgentSkuResults[0].id;
   }
+
+  let isWindows = publisher === 'MicrosoftWindowsServer';
 
   console.log(util.format('Allocating pool %s, %s, %s with agent %s', publisher, offer, skuId, nodeAgentSkuId));
   
@@ -291,15 +319,17 @@ function createPoolIfNotExist(poolId, flavor, _) {
       throw error;
     }
   }
-  waitForPoolSteady(poolId, 5 * 60 * 1000, _);
-  waitForVMsIdle(poolId, 5 * 60 * 1000, _);
+  waitForPoolSteady(poolId, 5 * 60 * millisecondsPerSecond, _);
+  waitForVMsIdle(poolId, 5 * 60 * millisecondsPerSecond, _);
+
+  return isWindows;
 }
 
 function fileUploadTestHelper(jobId, poolId, taskId, poolFlavor, _) {
   try {
-    createPoolIfNotExist(poolId, poolFlavor, _);
+    var isWindows = createPoolIfNotExist(poolId, poolFlavor, _);
     var text = 'test'
-    var spec = createBasicSpec(jobId, poolId, taskId, text);
+    var spec = createBasicSpec(jobId, poolId, taskId, text, isWindows);
 
     var fileName = path.join(os.tmpdir(), 'uploadTest.json')
     fs.writeFile(fileName, JSON.stringify(spec), _);
@@ -309,7 +339,7 @@ function fileUploadTestHelper(jobId, poolId, taskId, poolFlavor, _) {
     var job = batchClient.job.get(jobId, _);
     job.id.should.be.equal(jobId);
     
-    waitForTasksComplete(jobId, 30 * 1000, _);
+    waitForTasksComplete(jobId, 120 * millisecondsPerSecond, _);
     
     var task = batchClient.task.get(jobId, taskId, _);
 
@@ -370,6 +400,9 @@ describe('cli', function () {
     it('should upload a local file to auto-storage', function (done) {
       var input = ".\\test\\data\\batchFileTests\\foo.txt"
       suite.execute('batch file upload %s %s --json', input, testPrefix, function (result) {
+        console.log('Result text:' + result.text);
+        console.log('Result error text:' + result.errorText);
+        console.log('Result error stack: ' + result.errorStack);
         result.exitStatus.should.equal(0);
         //TODO: query storage to confirm container name and blob uploaded
         done();
@@ -379,6 +412,9 @@ describe('cli', function () {
     it('should upload a local file to auto-storage with path prefix', function (done) {
       var input = ".\\test\\data\\batchFileTests\\foo.txt"
       suite.execute('batch file upload %s %s --path \\test/data\\ --json', input, testPrefix, function (result) {
+        console.log('Result text:' + result.text);
+        console.log('Result error text:' + result.errorText);
+        console.log('Result error stack: ' + result.errorStack);
         result.exitStatus.should.equal(0);
         //TODO: query storage to confirm container name and blob uploaded
         done();
@@ -422,7 +458,7 @@ describe('cli', function () {
           {
             AccessPolicy: {
               Start: now,
-              Expiry: new Date(now.getTime() + 1 * 24 * 60 * 60 * 1000),
+              Expiry: new Date(now.getTime() + 1 * 24 * 60 * 60 * millisecondsPerSecond),
               Permissions: 'rw'
             }
           });
@@ -487,6 +523,22 @@ describe('cli', function () {
       var taskId = 'myTask';
 
       fileUploadTestHelper(jobId, poolId, taskId, 'suse-sles', _);
+    });
+
+    it('should work on Windows 2012 R2', function (_) {
+      var jobId = util.format('%s-ncj-windows-2012-r2', userName);
+      var poolId = util.format('%s-ncj-windows-2012-r2', userName);
+      var taskId = 'myTask';
+
+      fileUploadTestHelper(jobId, poolId, taskId, 'windows-2012-r2', _);
+    });
+
+    it('should work on Windows 2016', function (_) {
+      var jobId = util.format('%s-ncj-windows-2016', userName);
+      var poolId = util.format('%s-ncj-windows-2016', userName);
+      var taskId = 'myTask';
+
+      fileUploadTestHelper(jobId, poolId, taskId, 'windows-2016', _);
     });
 
   });

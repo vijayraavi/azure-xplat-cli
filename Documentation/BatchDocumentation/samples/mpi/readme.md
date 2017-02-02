@@ -1,39 +1,103 @@
 # Azure Batch MPI Template
-This template shows how to use `MS-MPI` to run MPI work.
+
+This samples shows how to use `MS-MPI` to run MPI work.
+
+## Features used by this sample
+
+* [Pool and job templates with parameterization](../../templates.md)
+* [Task collection factory](../../taskFactories.md#task-collection)
 
 ## Prerequisites
+
 You must have an Azure Batch account set up with a linked Azure Storage account.
-To successfully run this sample, you must first create an [application package](https://docs.microsoft.com/en-us/azure/batch/batch-application-packages) containing [MSMpiSetup.exe](https://msdn.microsoft.com/library/bb524831.aspx) (installed on a pool's compute nodes with a start task) and an MS-MPI program for the multi-instance task to execute. For the latter, we provide the [MPIHelloWorld sample project](https://github.com/Azure/azure-batch-samples/tree/master/CSharp/ArticleProjects/MultiInstanceTasks/MPIHelloWorld) for you to compile and use as your MS-MPI program.
 
-The following command can be used as example to create the application package:
+You will need an MS-MPI program for the multi-instance task to execute. We provide the [MPIHelloWorld sample project](https://github.com/Azure/azure-batch-samples/tree/master/CSharp/ArticleProjects/MultiInstanceTasks/MPIHelloWorld) for you to compile and to use as your MS-MPI program. Build a release version of `MPIHelloWorld.exe` so that you don't have to include any additional dependencies (for example, `msvcp140d.dll` or `vcruntime140d.dll`).
 
-1. Run command `azure batch application create --application-id MPIHelloWorld --account-name <account name> --resource-group <resource group>` to create an application named `MPIHelloWorld`.
-2. Download MSMpiSetup.exe and zip it.
-3. Run command `azure batch application package create --application-id MPIHelloWorld --version 1.0 --account-name <account name> --resource-group <resource group> --package-file <the local path to zip file>` to create an package version as `1.0` under the application `MPIHelloWorld`.
-4. Run command `azure batch application package activate --application-id MPIHelloWorld --version 1.0 --account-name <account name> --resource-group <resource group> --format zip` to activate the application package `MPIHelloWorld:1.0`. 
+## Create application package
+
+To successfully run this sample, you must first create an [application package](https://docs.microsoft.com/azure/batch/batch-application-packages) containing [MSMpiSetup.exe](https://msdn.microsoft.com/library/bb524831.aspx) (installed on a pool's compute nodes with a start task).
+
+The following commands can be used as example to create the application package:
+
+First, create the application package `MSMPI` itself:
+
+```bash
+azure batch application create --application-id MSMPI --account-name <account name> --resource-group <resource group>
+```
+You will need to supply your own values for `<account name>` and `<resource group>`.
+
+Create a zip file containing `MSMpiSetup.exe` (make sure this file is at the root of zip file). Create version `1.0` of the application `MSMPI`:
+
+```bash
+azure batch application package create --application-id MSMPI --version 1.0 --account-name <account name> --resource-group <resource group> --package-file <local path to MSMpiSetup.exe zip file>
+```
+
+Then, activate the application package `MSMPI:1.0`:
+
+```bash
+azure batch application package activate --application-id MSMPI --version 1.0 --account-name <account name> --resource-group <resource group> --format zip
+```
+
+Finally, set the application default version to `1.0`:
+
+```bash
+azure batch application set --application-id MSMPI --default-version 1.0 --account-name <account name> --resource-group <resource group>
+```
 
 ## Create a pool
-Run `azure batch pool create --template pool.json` to create your pool using the default settings (A pool named 'MultiInstanceSamplePool' with 3 small VMs). 
 
-If you want to change the default values of the pool creation, you can create a JSON file to supply the parameters of your pool, run `azure batch pool create --template pool.json --parameters <your settings JSON file>`.
+Create your pool:
 
-**You are billed for your Azure Batch pools, so don't forget to delete it when you're done.**
+```bash
+azure batch pool create --template pool.json
+```
+The default settings in `pool.json` specify a pool named `MultiInstanceSamplePool` containing **3** **small** virtual machines.
+
+If you want to change the default values of the pool creation, create a JSON file to supply the parameters of your pool and include it on your command line:
+
+```bash
+azure batch pool create --template pool.json --parameters <your settings JSON file>
+```
+
+**You are billed for your Azure Batch pools, so don't forget to delete this pool through the [Azure portal](https://portal.azure.com) when you're done.** 
 
 ## Upload files
-Run command `azure batch file upload <path> <group>` on a folder containing MPIHelloWorld.exe and its dependencies which are named with numerically increasing names with `sample` prefix (i.e. `sample1.wav`, `sample2.wave`, `sample3.wav`, etc).
 
-**Build a Release version of MPIHelloWorld.exe so that you don't have to include any additional dependencies as resource files (ex: msvcp140d.dll or vcruntime140d.dll).
+Upload the `MPIHelloWorld.exe` application and its dependencies from a folder:
 
-## Create a job with MPI task
-Run `azure batch job create --template job.json` to create your job using the default settings. If you want to configure other options of the job, such as the the pool id, you can look in the `job.json` parameters section to see what options are available.
+```bash
+azure batch file upload <path> mpi
+```
 
-1. `poolId` must match the pool you created earlier.
-2. `inputFileGroup` must match the name of the group used in the `azure batch file upload` command earlier.
-3. `jobId` is the id of job, which must not exist in the current Batch account.
-4. `vmCount` is the number of VM instances to execute the multi-instance task on.  It must be less than or equal to the pool's VM count.
+`mpi` is the default value of the inputFileGroup parameter in the job template. If you upload your files to a different file group, be sure to provide this value for the inputFileGroup parameter when creating your job (see the next section).
 
-To create a job with a different configuration, you can run command `azure batch job create --template job.json --parameters <your settings JSON file>`.
+## Create a job with an MPI task
+
+To create your job with default settings:
+
+```bash
+azure batch job create --template job.json
+```
+
+If you want to configure other options of the job, such as the the pool id, you can look in the `job.json` parameters section to see what options are available.
+
+| Parameter            | Required  | Description                                                                                                                                                                   |
+| -------------------- | --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| poolId               | Optional  | Name of the Azure Batch Pool to use for processing. <br/> Must match the pool you created earlier. Default value if not otherwise specified: `MultiInstanceSamplePool`.       |
+| inputFileGroup       | Optional  | Name of the file group in your storage account containing the files to process. <br/> Must match the name of the group used in the `azure batch file upload` command earlier. <br/> Default value if not otherwise specified: `mpi`. |
+| vmCount              | Optional  | The number of VM instances to execute the multi-instance task on. <br/> It must be less than or equal to the pool's VM count. Default value if not otherwise specified: 3     |
+| jobId                | Mandatory | Unique id of the job for processing. <br/> Must not duplicate the `id` of any existing job.                                                                                   |
+
+To create a job with a different configuration: 
+
+```bash
+azure batch job create --template job.json --parameters <your settings JSON file>
+```
 
 ## Monitor the job
-You can run command `azure batch task list --job-id <jobid>` to monitor the tasks in the job and their progress.
+
+You can use this command to monitor the tasks in the job and their progress:
+``` bash
+azure batch task list --job-id <jobid>`
+```
 You can also use the [Azure portal](https://portal.azure.com) or [Batch Explorer](https://github.com/Azure/azure-batch-samples/tree/master/CSharp/BatchExplorer) for monitoring.
